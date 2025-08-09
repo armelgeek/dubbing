@@ -5,3 +5,6 @@ export type ApiResponse = {
 export * from './blog';
 export * from './user';
 export * from './category';
+export * from './job';
+export * from './media';
+export * from './project';

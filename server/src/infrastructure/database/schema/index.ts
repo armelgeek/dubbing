@@ -26,6 +26,7 @@ export const userRolesRelations = relations(userRoles, ({ one }) => ({
 
 export { blog } from './blog'
 export { blogCategories, categories } from './category'
+export { projects, jobs, mediaAssets, transcripts, translations, voiceProfiles, transcriptionCache } from './dubbing'
 
 export type Role = InferModel<typeof roles>
 export type UserRole = InferModel<typeof userRoles>
