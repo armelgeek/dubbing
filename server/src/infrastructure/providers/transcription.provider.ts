@@ -1,5 +1,5 @@
-import type { SegmentTiming } from '../../../../shared/src/types/job'
 import { whisperClient } from '../ml/whisper.client'
+import type { SegmentTiming } from '../../../../shared/src/types/job'
 
 export interface TranscriptionResult {
   language: string
@@ -8,7 +8,7 @@ export interface TranscriptionResult {
 
 export interface TranscriptionProvider {
   id: string
-  transcribe(audioPath: string, onProgress?: (p: number) => void): Promise<TranscriptionResult>
+  transcribe: (audioPath: string, onProgress?: (p: number) => void) => Promise<TranscriptionResult>
 }
 
 class LocalWhisperTranscriptionProvider implements TranscriptionProvider {

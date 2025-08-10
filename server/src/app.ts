@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi'
 import { apiReference } from '@scalar/hono-api-reference'
+import { serveStatic } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 import { prettyJSON } from 'hono/pretty-json'
@@ -44,10 +45,26 @@ export class App {
   private initializeGlobalMiddlewares() {
     this.app.use(logger())
     this.app.use(prettyJSON())
+    // Serve uploaded assets from local storage (configurable)
+    const assetsBaseDir = Bun.env.ASSETS_BASE_DIR || '/tmp/dubbing-assets'
+    let publicPrefix = Bun.env.ASSETS_PUBLIC_PREFIX || '/assets'
+    if (!publicPrefix.startsWith('/')) publicPrefix = `/${publicPrefix}`
+    const ESCAPE_RE = /[.*+?^${}()|[\]\\]/g
+    const escaped = publicPrefix.replaceAll(ESCAPE_RE, String.raw`\$&`)
+    const mountPath = publicPrefix.endsWith('/') ? `${publicPrefix}*` : `${publicPrefix}/*`
+
+    this.app.use(
+      mountPath,
+      serveStatic({
+        root: assetsBaseDir,
+        rewriteRequestPath: (path) => path.replace(new RegExp(`^${escaped}`), '')
+      })
+    )
+
     this.app.use(
       '*',
       cors({
-        origin: [Bun.env.BETTER_AUTH || 'http://localhost:3000', Bun.env.REACT_APP_URL || 'http://localhost:5173'],
+        origin: [Bun.env.BETTER_AUTH_URL || 'http://localhost:3000', Bun.env.REACT_APP_URL || 'http://localhost:5173'],
         credentials: true,
         maxAge: 86400
       })

@@ -79,190 +79,65 @@ Canal identifié par `?projectId=...` lors de la connexion WS.
 | ENABLE_LIPSYNC=true | Ajoute le job LIPSYNC dans la chaîne |
 | REDIS_URL | Connexion BullMQ |
 | DATABASE_URL | Postgres (Drizzle) |
+| FFMPEG_BIN | Chemin du binaire ffmpeg, sinon `ffmpeg` dans le PATH |
+| MUX_FALLBACK_PLACEHOLDER=1 | En cas d'absence de ffmpeg, stocke un placeholder au lieu d'échouer |
+| ASSETS_BASE_DIR | Répertoire local pour les assets (default `/tmp/dubbing-assets`) |
+| ASSETS_PUBLIC_PREFIX | Préfixe d'URL publique pour servir les assets (default `/assets`) |
 
-## Test Manuel Rapide
-1. Insérer un projet :
-```sql
-INSERT INTO projects (id, user_id, title, status) VALUES ('test123','user_1','Demo','DRAFT');
-```
-2. (Bypass ou fournir auth) Appeler :
-```bash
-curl -X POST http://localhost:3000/api/v1/projects/test123/start \
-  -H 'Content-Type: application/json' \
-  -d '{"targetLangs":["fr","es"]}'
-```
-3. Suivre l'évolution :
-```bash
-curl http://localhost:3000/api/v1/projects/test123/jobs | jq
-```
-4. WebSocket (ex: browser / wscat) :
-```
-wscat -c ws://localhost:3000/ws?projectId=test123
-```
-5. Vérifier BDD :
-```sql
-SELECT * FROM jobs WHERE project_id='test123';
-SELECT * FROM transcripts WHERE project_id='test123';
-SELECT * FROM translations WHERE project_id='test123';
-SELECT * FROM media_assets WHERE project_id='test123';
-```
+## Step MUX – Détails
+- Entrées :
+  - `SOURCE_VIDEO` (media_assets.type = SOURCE_VIDEO)
+  - `DUB_AUDIO` par langue (media_assets.type = DUB_AUDIO, meta.lang)
+- Préconditions :
+  - SOURCE_VIDEO obligatoire
+  - Au moins un DUB_AUDIO sinon échec (Option B)
+- Commande FFmpeg :
+  - `ffmpeg -y -i <video> -i <audio> -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest -movflags +faststart out.mp4`
+- Résolution chemins :
+  - URL `/assets/...` → chemin local `${ASSETS_BASE_DIR}/...`
+  - Autres URLs HTTP/HTTPS → téléchargement en tmp
+- Sortie :
+  - `FINAL_VIDEO` par langue sous `final-videos/<projectId>/<lang>/<uuid>.mp4`
+- Fallback :
+  - Si FFmpeg indisponible et `MUX_FALLBACK_PLACEHOLDER=1` → upload d'un placeholder
+  - Sinon échec avec message explicite
+
+## TTS – Détails
+- Le client TTS mock génère un **WAV silencieux** PCM 16-bit à 16kHz.
+- La durée = somme des segments (end - start), pour éviter les mux invalides.
+- Stockage : `dub-audio/<projectId>/<lang>/<uuid>.wav`
 
 ## Idempotence & Sécurité
-- IDs de jobs déterministes : ré-enfilement sans doublons (upsert ignore si existe).
-- Progress DB + WebSocket décorrélés (échec d'émission n'interrompt pas persistance).
+- IDs de jobs déterministes : upserts/idempotence
+- Progress DB ≠ WS (best effort)
+- Permissions uploads/metrics : à renforcer (TODO)
 
-## Améliorations Futures (Roadmap interne)
-- Retries configurables par type de job
-- Journalisation structurée (pino) + métriques (Prometheus)
-- Gestion fine des quotas / facturation par minute audio
-- Alignement labiales réel (Wav2Lip) + segmentation adaptative
-- Stockage objet (MinIO/S3) au lieu du chemin local stub
+## Améliorations Futures
+- Retries/backoff par worker
+- Prometheus + logs structurés
+- S3/MinIO par défaut, cleanup des orphelins
+- MUX avancé (multi-pistes, timelines), lip-sync réel
+- Tests unitaires workers/providers
 
-## Providers (Abstraction)
-Interfaces génériques introduites:
-- TranscriptionProvider (`transcription.provider.ts`)
-- TTSProvider (`tts.provider.ts`)
-- StorageProvider (`storage.provider.ts`)
-- TranslationProvider (`translation.provider.ts`)
-
-Implémentations actuelles: locales (whisper stub, xtts stub, fs local). Permet d'ajouter rapidement des backends externes (SaaS ou GPU) via nouvelle classe + changement d'import usine.
-
-## Résumé
-Le pipeline persiste chaque étape, émet les progressions en temps réel et expose un endpoint de consolidation. La structure actuelle permet d'itérer vers des implémentations ML réelles sans changer les contrats externes.
-
-## Flux Création & Démarrage
-1. Upload vidéo: `POST /api/v1/uploads/video` (multipart: file) → `{ url, key }`
-2. Création projet: `POST /api/v1/projects { userId, title, sourceVideoUrl }` → projet DRAFT
-3. Lancement pipeline: `POST /api/v1/projects/{id}/start { targetLangs: [...] }`
-4. Suivi progress: WebSocket + `GET /api/v1/projects/{id}/jobs`
-5. Récap global: `GET /api/v1/projects/{id}/summary`
-6. Métriques globales pipeline: `GET /api/v1/metrics`
-
-## Endpoint Upload Vidéo
-- Route: `POST /api/v1/uploads/video`
-- Form-data: `file` (obligatoire), `projectId` (optionnel)
-- Stockage via `Providers.storage()` (local fs ou MinIO).
-- Enregistre un media asset SOURCE_VIDEO si `projectId` fourni.
-- Réponse 201: `{ success, key, url, size, projectId? }`
-
-## Endpoint Création Projet
-- Route: `POST /api/v1/projects`
-- Body: `{ userId: string, title: string, sourceVideoUrl?: string, id?: string }`
-- Statut initial: `DRAFT`
-- Réponse 201: `{ success, project }`
-
-## Endpoint Summary
-- Route: `GET /api/v1/projects/{id}/summary`
-- Contenu: project, jobs, stats (counts + durées), languages (transcripts+translations), assets counts.
-- Stats: `totalJobs, completed, errored, avgDurationMs, totalDurationMs`.
-
-## Métriques Runtime
-- Route: `GET /api/v1/metrics`
-- Structure:
-```json
-{
-  "generatedAt": "ISO",
-  "aggregate": { "started":0, "completed":0, "errored":0, "totalDurationMs":0 },
-  "perKind": [
-    { "kind":"TRANSCRIBE", "started":1, "completed":1, "errored":0, "durations": { "count":1, "totalMs":1234, "minMs":1234, "maxMs":1234, "meanMs":1234 } }
-  ]
-}
-```
-- Collecte: instrumentation dans chaque worker (start/end, succès/erreur).
-
-## Caching Transcription
-- Table: `transcription_cache(hash PK, language, segments, duration, createdAt)`
-- Hash: SHA-256 du fichier audio source (utilitaire `hashFile`).
-- Si cache hit: insertion transcript directe + job marqué DONE sans recalcul.
-
-## Providers & Stockage
-- Abstraction via `Providers.*()` : transcription, translation, tts, storage.
-- Storage:
-  - Local FS (par défaut)
-  - MinIO (si `STORAGE_PROVIDER=minio` + env MINIO_* présents)
-- Ajout dynamique possible de nouveaux providers sans changer les workers.
-
-## Variables d'Environnement (Nouvelles / Mise à jour)
-| Variable | Rôle |
-|----------|------|
-| STORAGE_PROVIDER | `local` (par défaut) ou `minio` |
-| MINIO_ENDPOINT | Host MinIO |
-| MINIO_PORT | Port MinIO (ex: 9000) |
-| MINIO_USE_SSL | `true/false` |
-| MINIO_ACCESS_KEY | Clé accès |
-| MINIO_SECRET_KEY | Clé secrète |
-| MINIO_BUCKET | Bucket utilisé |
-| MINIO_PUBLIC_BASE | Base URL publique (CDN/Reverse proxy) |
-| ENABLE_LIPSYNC | Active job LIPSYNC |
-| REDIS_URL | Redis BullMQ |
-| DATABASE_URL | Postgres |
-
-## Exemple .env (extrait)
-```env
-PORT=3000
-DATABASE_URL=postgresql://postgres:password@localhost:5432/dubbing?search_path=public
-REDIS_URL=redis://localhost:6379
-STORAGE_PROVIDER=local
-ENABLE_LIPSYNC=false
-# MinIO (si STORAGE_PROVIDER=minio)
-MINIO_ENDPOINT=localhost
-MINIO_PORT=9000
-MINIO_USE_SSL=false
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=dubbing-assets
-MINIO_PUBLIC_BASE=http://localhost:9000
-```
-
-## Workflow Complet (Résumé)
-1. Upload vidéo
-2. Création projet (DRAFT)
-3. Start pipeline (jobs pré-créés + enqueue)
-4. TRANSCRIBE (cache si possible)
-5. TRANSLATE (multi-lang)
-6. VOICE (génère DUB_AUDIO)
-7. (LIPSYNC optionnel)
-8. MUX (FINAL_VIDEO + project COMPLETED)
-9. Summary & Métriques consultables
-
-## Exemple Séquence cURL
+## Exemple Séquence cURL (rappel)
 ```bash
-# 1. Upload
+# Upload
 echo 'fake' > sample.mp4
 curl -F file=@sample.mp4 http://localhost:3000/api/v1/uploads/video
 
-# Suppose retour { "url":"/assets/source-videos/..mp4" }
-VIDEO_URL="<copier>"
-
-# 2. Create project
+# Create project (utiliser l'URL retournée)
+VIDEO_URL="<copier depuis l'upload>"
 curl -X POST http://localhost:3000/api/v1/projects \
   -H 'Content-Type: application/json' \
   -d '{"userId":"user_1","title":"Demo","sourceVideoUrl":"'$VIDEO_URL'"}'
-# -> récupérer project.id
 
-# 3. Start pipeline
-curl -X POST http://localhost:3000/api/v1/projects/<projectId>/start \
-  -H 'Content-Type: application/json' \
-  -d '{"targetLangs":["fr","es"]}'
+# Start
+authHeader="-H 'Authorization: Bearer <token>'" # selon config
+curl -X POST http://localhost:3000/api/v1/projects/<projectId>/start -d '{"targetLangs":["fr","es"]}'
 
-# 4. Jobs state
+# Jobs
 curl http://localhost:3000/api/v1/projects/<projectId>/jobs | jq
 
-# 5. Summary
+# Summary
 curl http://localhost:3000/api/v1/projects/<projectId>/summary | jq
-
-# 6. Metrics
-defaultMetrics=$(curl http://localhost:3000/api/v1/metrics)
 ```
-
-## Roadmap Mise à Jour
-- [FAIT] Caching transcription
-- [FAIT] Métriques in-memory
-- [FAIT] Upload vidéo + création projet + summary
-- [FAIT] MinIO provider optionnel
-- [À FAIRE] Auth fine-grained sur uploads & metrics
-- [À FAIRE] Tests unitaires providers & workers
-- [À FAIRE] Stockage objet distant chiffré
-- [À FAIRE] Retention & cleanup des assets orphelins
-- [À FAIRE] Facturation/quotas (durée audio cumulée)
-- [À FAIRE] Lip-sync réel (Wav2Lip) + MUX avancé (FFmpeg timeline)

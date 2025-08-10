@@ -1,21 +1,8 @@
+import process from 'node:process'
+import { storageProvider as localStorage, type StorageProvider } from './storage.provider'
 import { transcriptionProvider as localTranscription } from './transcription.provider'
-import { ttsProvider as localTts } from './tts.provider'
 import { translationProvider as localTranslation } from './translation.provider'
-import { storageProvider as localStorage, StorageProvider } from './storage.provider'
-
-let minioLoaded: any
-function getMinio() {
-  if (!minioLoaded) {
-    try {
-      // dynamic import to avoid runtime error if not installed
-      // @ts-ignore
-      minioLoaded = require('./minio.storage.provider')
-    } catch (e) {
-      throw new Error('MinIO provider requested but minio dependency not installed')
-    }
-  }
-  return minioLoaded
-}
+import { ttsProvider as localTts } from './tts.provider'
 
 // Placeholders for future external implementations
 // They can be dynamically imported later when needed.
@@ -43,8 +30,6 @@ export const Providers = {
   storage(): StorageProvider {
     const kind = process.env.STORAGE_PROVIDER || 'local'
     switch (kind) {
-      case 'minio':
-        return new (getMinio().MinioStorageProvider)()
       default:
         return localStorage
     }

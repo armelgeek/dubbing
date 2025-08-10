@@ -1,9 +1,9 @@
+import { eq } from 'drizzle-orm'
 import { db } from '../database/db'
 import { projects } from '../database/schema/dubbing'
-import { eq } from 'drizzle-orm'
 
 export class ProjectRepository {
-  async findById(id: string) {
+  findById(id: string) {
     return db.query.projects.findFirst({ where: (p, { eq }) => eq(p.id, id) })
   }
   async create(data: { id: string; userId: string; title: string; sourceVideoUrl?: string | null }) {

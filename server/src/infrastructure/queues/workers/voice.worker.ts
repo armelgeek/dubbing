@@ -1,12 +1,13 @@
+import { randomUUID } from 'node:crypto'
+import process from 'node:process'
 import { Worker } from 'bullmq'
 import { JobKind, JobStatus, type SegmentTiming } from '../../../../../shared/src/types/job'
+import { recordJobEnd, recordJobStart } from '../../../infrastructure/metrics/metrics.registry'
+import { Providers } from '../../../infrastructure/providers/provider.factory'
 import { emitJobProgress } from '../../../infrastructure/realtime/progress-emitter'
 import { JobRepository } from '../../../infrastructure/repositories/job.repository'
-import { TranslationRepository } from '../../../infrastructure/repositories/translation.repository'
 import { MediaAssetRepository } from '../../../infrastructure/repositories/media-asset.repository'
-import { randomUUID } from 'crypto'
-import { Providers } from '../../../infrastructure/providers/provider.factory'
-import { recordJobStart, recordJobEnd } from '../../../infrastructure/metrics/metrics.registry'
+import { TranslationRepository } from '../../../infrastructure/repositories/translation.repository'
 
 const connection = { url: process.env.REDIS_URL || 'redis://localhost:6379' }
 const jobRepo = new JobRepository()
@@ -33,7 +34,13 @@ async function processVoice(job: any) {
       jobRepo.setProgress(jobId, overall).catch(() => {})
       emitJobProgress({ projectId, kind: JobKind.VOICE, status: JobStatus.RUNNING, progress: overall })
     })
-    await mediaRepo.insert({ id: randomUUID(), projectId, type: 'DUB_AUDIO', url: block.audioPath, meta: { lang, duration: block.duration } })
+    await mediaRepo.insert({
+      id: randomUUID(),
+      projectId,
+      type: 'DUB_AUDIO',
+      url: block.audioPath,
+      meta: { lang, duration: block.duration }
+    })
   }
   await jobRepo.setDone(jobId)
   recordJobEnd(JobKind.VOICE, Date.now() - startedAt, true)
@@ -47,7 +54,13 @@ voiceWorker.on('failed', (job, err) => {
   const data = job?.data
   if (data?.projectId && data?.jobId) {
     jobRepo.setError(data.jobId, err.message).catch(() => {})
-    emitJobProgress({ projectId: data.projectId, kind: JobKind.VOICE, status: JobStatus.ERROR, progress: 0, error: err.message })
+    emitJobProgress({
+      projectId: data.projectId,
+      kind: JobKind.VOICE,
+      status: JobStatus.ERROR,
+      progress: 0,
+      error: err.message
+    })
     recordJobEnd(JobKind.VOICE, 0, false)
   }
 })
