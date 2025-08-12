@@ -81,24 +81,30 @@ export async function muxDubbedVideo(params: {
   audioUrl: string
   outKey: string
   meta?: Record<string, any>
+  originalVolume?: number // default 0.2
+  dubVolume?: number // default 1.0
 }): Promise<{ key: string; url: string; size: number }> {
-  const { sourceUrl, audioUrl, outKey, meta } = params
+  const { sourceUrl, audioUrl, outKey, meta, originalVolume = 0.2, dubVolume = 1.0 } = params
 
   const ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg'
 
   const [video, audio] = await Promise.all([resolveToLocalPath(sourceUrl), resolveToLocalPath(audioUrl)])
 
   const outPath = join(tmpdir(), `mux-out-${randomUUID()}.mp4`)
+  // filter_complex: [0:a]volume=0.2[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]
+  const filter = `[0:a]volume=${originalVolume}[a0];[1:a]volume=${dubVolume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]`
   const args = [
     '-y',
     '-i',
     video.path,
     '-i',
     audio.path,
+    '-filter_complex',
+    filter,
     '-map',
     '0:v:0',
     '-map',
-    '1:a:0',
+    '[aout]',
     '-c:v',
     'copy',
     '-c:a',
