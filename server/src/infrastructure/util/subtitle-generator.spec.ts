@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { SegmentTiming } from '../../../../../shared/src/types/job'
+import type { SegmentTiming } from '@shared/types/job'
 import { generateSRT, generateVTT } from './subtitle-generator'
 
 describe('subtitle-generator', () => {
