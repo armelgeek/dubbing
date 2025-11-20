@@ -6,9 +6,16 @@ Chaîne de traitement asynchrone orchestrée via BullMQ (Redis) pour transformer
 Étapes (jobs) séquentielles :
 1. TRANSCRIBE → Génère les segments de transcription (langue source)
 2. TRANSLATE → Produit les segments traduits pour chaque langue cible
-3. VOICE → Génère l'audio doublé par langue
-4. (LIPSYNC) → Optionnel selon la feature flag `ENABLE_LIPSYNC`
-5. MUX → Assemble (mux) les pistes et marque le projet terminé
+3. SUBTITLE → Génère les fichiers de sous-titres (SRT/VTT) pour chaque langue
+4. VOICE → Génère l'audio doublé par langue (optionnel si skipVoice=true)
+5. (LIPSYNC) → Optionnel selon la feature flag `ENABLE_LIPSYNC`
+6. MUX → Assemble (mux) les pistes et marque le projet terminé
+
+## Mode Subtitle-Only
+Lorsque `skipVoice=true` est passé au démarrage du pipeline :
+- Les étapes VOICE et LIPSYNC sont ignorées
+- Seuls les sous-titres sont générés et intégrés dans la vidéo finale
+- Le MUX crée des vidéos avec sous-titres intégrés mais sans doublage audio
 
 ## Tables principales
 | Table | Rôle |
@@ -17,22 +24,24 @@ Chaîne de traitement asynchrone orchestrée via BullMQ (Redis) pour transformer
 | jobs | Suivi de chaque étape (status, progress, timestamps) |
 | transcripts | Segments de transcription (langue source) |
 | translations | Segments traduits (par langue) |
-| media_assets | Actifs générés (DUB_AUDIO, FINAL_VIDEO, etc.) |
+| media_assets | Actifs générés (DUB_AUDIO, SUBTITLE_SRT, SUBTITLE_VTT, FINAL_VIDEO, etc.) |
 
 ## États & Statuts
 - Job.status : PENDING → RUNNING → DONE / ERROR
-- Project.status : DRAFT → COMPLETED (à la fin du MUX) 
+- Project.status : DRAFT → COMPLETED (à la fin du MUX)
 
 ## Orchestrateur
-`PipelineOrchestrator.start(projectId, targetLangs)` :
+`PipelineOrchestrator.start(projectId, targetLangs, { skipVoice? })` :
 1. Pré-crée les lignes `jobs` (PENDING, progress=0) avec IDs déterministes `projectId:KIND`
 2. Enfile chaque job dans l'ordre avec délais progressifs
+3. Si skipVoice=true, ignore VOICE et LIPSYNC
 
 ## Workers & Persistance
 | Worker | Actions Persistance |
 |--------|---------------------|
 | TRANSCRIBE | setRunning, progress, insert transcript (segments), setDone |
 | TRANSLATE | setRunning, progress agrégé, insert translations (par langue), setDone |
+| SUBTITLE | setRunning, progress agrégé, insert media_assets (SUBTITLE_SRT, SUBTITLE_VTT + meta.lang), setDone |
 | VOICE | setRunning, progress agrégé, insert media_assets (DUB_AUDIO + meta.lang), setDone |
 | LIPSYNC | (skipped si flag off) sinon setRunning → setDone |
 | MUX | setRunning, insert FINAL_VIDEO media_assets, update project COMPLETED, setDone |
@@ -131,9 +140,16 @@ curl -X POST http://localhost:3000/api/v1/projects \
   -H 'Content-Type: application/json' \
   -d '{"userId":"user_1","title":"Demo","sourceVideoUrl":"'$VIDEO_URL'"}'
 
-# Start
+# Start avec doublage audio
 authHeader="-H 'Authorization: Bearer <token>'" # selon config
-curl -X POST http://localhost:3000/api/v1/projects/<projectId>/start -d '{"targetLangs":["fr","es"]}'
+curl -X POST http://localhost:3000/api/v1/projects/<projectId>/start \
+  -H 'Content-Type: application/json' \
+  -d '{"targetLangs":["fr","es"]}'
+
+# Start en mode subtitle-only (sans TTS)
+curl -X POST http://localhost:3000/api/v1/projects/<projectId>/start \
+  -H 'Content-Type: application/json' \
+  -d '{"targetLangs":["fr","es"],"skipVoice":true}'
 
 # Jobs
 curl http://localhost:3000/api/v1/projects/<projectId>/jobs | jq
