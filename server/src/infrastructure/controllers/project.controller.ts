@@ -31,7 +31,10 @@ export class ProjectController implements Routes {
           body: {
             content: {
               'application/json': {
-                schema: z.object({ targetLangs: z.array(z.string()).min(1) })
+                schema: z.object({ 
+                  targetLangs: z.array(z.string()).min(1),
+                  skipVoice: z.boolean().optional().describe('Skip voice generation, only generate subtitles')
+                })
               }
             }
           }
@@ -49,8 +52,8 @@ export class ProjectController implements Routes {
       }),
       async (c) => {
         const { id } = c.req.valid('param') as { id: string }
-        const { targetLangs } = c.req.valid('json') as { targetLangs: string[] }
-        await this.orchestrator.start(id, targetLangs)
+        const { targetLangs, skipVoice } = c.req.valid('json') as { targetLangs: string[]; skipVoice?: boolean }
+        await this.orchestrator.start(id, targetLangs, { skipVoice })
         return c.json({ success: true, accepted: true }, 202)
       }
     )

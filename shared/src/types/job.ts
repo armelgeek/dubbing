@@ -4,6 +4,7 @@ export enum JobKind {
   TRANSCRIBE = 'TRANSCRIBE',
   TRANSLATE = 'TRANSLATE',
   VOICE = 'VOICE',
+  SUBTITLE = 'SUBTITLE',
   LIPSYNC = 'LIPSYNC',
   MUX = 'MUX'
 }

@@ -6,6 +6,7 @@ import { MetricsController } from './infrastructure/controllers/metrics.controll
 // Worker imports to register processors
 import './infrastructure/queues/workers/transcribe.worker'
 import './infrastructure/queues/workers/translate.worker'
+import './infrastructure/queues/workers/subtitle.worker'
 import './infrastructure/queues/workers/voice.worker'
 import './infrastructure/queues/workers/lipsync.worker'
 import './infrastructure/queues/workers/mux.worker'

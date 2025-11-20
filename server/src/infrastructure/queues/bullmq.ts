@@ -11,6 +11,7 @@ const defaultJobOpts = {
 export const queues: Record<JobKind, Queue> = {
   [JobKind.TRANSCRIBE]: new Queue(JobKind.TRANSCRIBE, { connection, defaultJobOptions: defaultJobOpts }),
   [JobKind.TRANSLATE]: new Queue(JobKind.TRANSLATE, { connection, defaultJobOptions: defaultJobOpts }),
+  [JobKind.SUBTITLE]: new Queue(JobKind.SUBTITLE, { connection, defaultJobOptions: defaultJobOpts }),
   [JobKind.VOICE]: new Queue(JobKind.VOICE, { connection, defaultJobOptions: defaultJobOpts }),
   [JobKind.LIPSYNC]: new Queue(JobKind.LIPSYNC, { connection, defaultJobOptions: defaultJobOpts }),
   [JobKind.MUX]: new Queue(JobKind.MUX, { connection, defaultJobOptions: defaultJobOpts })

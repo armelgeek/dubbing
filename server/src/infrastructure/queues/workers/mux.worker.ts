@@ -16,7 +16,7 @@ const projectRepo = new ProjectRepository()
 
 async function processMux(job: any) {
   const startedAt = Date.now()
-  const { projectId, jobId } = job.data as { projectId: string; jobId: string }
+  const { projectId, jobId, skipVoice } = job.data as { projectId: string; jobId: string; skipVoice?: boolean }
   await jobRepo.setRunning(jobId)
   recordJobStart(JobKind.MUX)
   emitJobProgress({ projectId, kind: JobKind.MUX, status: JobStatus.RUNNING, progress: 0 })
@@ -24,24 +24,68 @@ async function processMux(job: any) {
   const source = await mediaRepo.findByType(projectId, 'SOURCE_VIDEO')
   const allAssets = await mediaRepo.listForProject(projectId)
   const dubAudios = allAssets.filter((a: any) => a.type === 'DUB_AUDIO')
-
-  const total = Math.max(dubAudios.length, 1)
-  let done = 0
+  const subtitles = allAssets.filter((a: any) => a.type === 'SUBTITLE_SRT' || a.type === 'SUBTITLE_VTT')
 
   if (!source?.url) {
     throw new Error('No SOURCE_VIDEO found for mux')
   }
 
-  if (dubAudios.length === 0) {
+  // In subtitle-only mode, we don't need dub audio
+  if (!skipVoice && dubAudios.length === 0) {
     throw new Error('No DUB_AUDIO tracks found for mux')
-  } else {
-    for (const dub of dubAudios) {
-      const lang = dub.meta?.lang || 'unknown'
+  }
+
+  // If skipVoice is true, generate video with embedded subtitles only
+  if (skipVoice) {
+    const subtitlesByLang = new Map<string, any>()
+    for (const sub of subtitles) {
+      const lang = sub.meta?.lang
+      if (lang && sub.type === 'SUBTITLE_SRT') {
+        subtitlesByLang.set(lang, sub)
+      }
+    }
+
+    const total = Math.max(subtitlesByLang.size, 1)
+    let done = 0
+
+    for (const [lang, subtitle] of subtitlesByLang) {
       const key = `final-videos/${projectId}/${lang}/${randomUUID()}.mp4`
 
       const stored = await muxDubbedVideo({
         sourceUrl: source.url,
+        subtitleUrl: subtitle.url,
+        outKey: key,
+        meta: { projectId, lang, source: source.url, subtitle: subtitle.url }
+      })
+
+      await mediaRepo.insert({
+        id: randomUUID(),
+        projectId,
+        type: 'FINAL_VIDEO',
+        url: stored.url,
+        meta: { lang, source: source.url, subtitle: subtitle.url, subtitleOnly: true }
+      })
+      done += 1
+      const p = Math.round((done / total) * 100)
+      await jobRepo.setProgress(jobId, p).catch(() => {})
+      emitJobProgress({ projectId, kind: JobKind.MUX, status: JobStatus.RUNNING, progress: p })
+    }
+  } else {
+    // Original logic with audio dubbing
+    const total = Math.max(dubAudios.length, 1)
+    let done = 0
+
+    for (const dub of dubAudios) {
+      const lang = dub.meta?.lang || 'unknown'
+      const key = `final-videos/${projectId}/${lang}/${randomUUID()}.mp4`
+
+      // Find matching subtitle if available
+      const subtitle = subtitles.find((s: any) => s.meta?.lang === lang && s.type === 'SUBTITLE_SRT')
+
+      const stored = await muxDubbedVideo({
+        sourceUrl: source.url,
         audioUrl: dub.url,
+        subtitleUrl: subtitle?.url,
         outKey: key,
         meta: { projectId, lang, source: source.url, dubAudio: dub.url }
       })
@@ -51,7 +95,7 @@ async function processMux(job: any) {
         projectId,
         type: 'FINAL_VIDEO',
         url: stored.url,
-        meta: { lang, source: source.url, dubAudio: dub.url }
+        meta: { lang, source: source.url, dubAudio: dub.url, subtitle: subtitle?.url }
       })
       done += 1
       const p = Math.round((done / total) * 100)

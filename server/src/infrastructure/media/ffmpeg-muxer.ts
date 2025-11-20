@@ -78,42 +78,68 @@ function runFFmpeg(bin: string, args: string[]): Promise<void> {
 
 export async function muxDubbedVideo(params: {
   sourceUrl: string
-  audioUrl: string
+  audioUrl?: string
+  subtitleUrl?: string
   outKey: string
   meta?: Record<string, any>
   originalVolume?: number // default 0.2
   dubVolume?: number // default 1.0
 }): Promise<{ key: string; url: string; size: number }> {
-  const { sourceUrl, audioUrl, outKey, meta, originalVolume = 0.2, dubVolume = 1.0 } = params
+  const { sourceUrl, audioUrl, subtitleUrl, outKey, meta, originalVolume = 0.2, dubVolume = 1.0 } = params
 
   const ffmpegBin = process.env.FFMPEG_BIN || 'ffmpeg'
 
-  const [video, audio] = await Promise.all([resolveToLocalPath(sourceUrl), resolveToLocalPath(audioUrl)])
+  const toResolve: Promise<{ path: string; isTemp: boolean }>[] = [resolveToLocalPath(sourceUrl)]
+  if (audioUrl) toResolve.push(resolveToLocalPath(audioUrl))
+  if (subtitleUrl) toResolve.push(resolveToLocalPath(subtitleUrl))
+
+  const [video, audio, subtitle] = await Promise.all(toResolve)
 
   const outPath = join(tmpdir(), `mux-out-${randomUUID()}.mp4`)
-  // filter_complex: [0:a]volume=0.2[a0];[1:a]volume=1.0[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]
-  const filter = `[0:a]volume=${originalVolume}[a0];[1:a]volume=${dubVolume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]`
-  const args = [
-    '-y',
-    '-i',
-    video.path,
-    '-i',
-    audio.path,
-    '-filter_complex',
-    filter,
-    '-map',
-    '0:v:0',
-    '-map',
-    '[aout]',
-    '-c:v',
-    'copy',
-    '-c:a',
-    'aac',
-    '-shortest',
-    '-movflags',
-    '+faststart',
-    outPath
-  ]
+  
+  const args: string[] = ['-y', '-i', video.path]
+  
+  // Add audio input if provided
+  if (audio) {
+    args.push('-i', audio.path)
+  }
+  
+  // Add subtitle input if provided
+  if (subtitle) {
+    args.push('-i', subtitle.path)
+  }
+
+  // Build filter and mapping
+  if (audio && !subtitle) {
+    // Audio dubbing only (original behavior)
+    const filter = `[0:a]volume=${originalVolume}[a0];[1:a]volume=${dubVolume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]`
+    args.push('-filter_complex', filter, '-map', '0:v:0', '-map', '[aout]')
+  } else if (audio && subtitle) {
+    // Audio dubbing + subtitles
+    const filter = `[0:a]volume=${originalVolume}[a0];[1:a]volume=${dubVolume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]`
+    args.push('-filter_complex', filter, '-map', '0:v:0', '-map', '[aout]', '-map', '2:s:0')
+  } else if (subtitle && !audio) {
+    // Subtitle only (no audio dubbing)
+    args.push('-map', '0:v:0', '-map', '0:a:0', '-map', '1:s:0')
+  } else {
+    // No audio, no subtitle (shouldn't happen, but copy everything)
+    args.push('-map', '0:v:0', '-map', '0:a:0')
+  }
+
+  // Common output options
+  args.push('-c:v', 'copy')
+  
+  if (subtitle) {
+    args.push('-c:s', 'mov_text') // Embed subtitles in MP4
+  }
+  
+  if (audio || !subtitle) {
+    args.push('-c:a', 'aac')
+  } else {
+    args.push('-c:a', 'copy')
+  }
+  
+  args.push('-shortest', '-movflags', '+faststart', outPath)
 
   try {
     await runFFmpeg(ffmpegBin, args)
@@ -143,7 +169,8 @@ export async function muxDubbedVideo(params: {
 
   await Promise.allSettled([
     video.isTemp ? fs.unlink(video.path) : Promise.resolve(),
-    audio.isTemp ? fs.unlink(audio.path) : Promise.resolve(),
+    audio?.isTemp ? fs.unlink(audio.path) : Promise.resolve(),
+    subtitle?.isTemp ? fs.unlink(subtitle.path) : Promise.resolve(),
     fs.unlink(outPath)
   ])
 
